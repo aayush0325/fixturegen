@@ -53,32 +53,45 @@ function offsetFixtures(jsonObj) {
   });
 
   const outFile = path.join(dir, jsonObj.filename);
-  fs.writeFileSync(outFile, JSON.stringify(obj, null, 2), 'utf8');
+  fs.writeFileSync(outFile, JSON.stringify(obj, null, 2) + '\n', 'utf8');
 }
 
+function capitalizeFirst(str) {
+    return str[0].toUpperCase() + str.substring(1);
+}
 
 function negativeStrideFixtures(jsonObj) {
   const dir = path.join(directoryPath, 'negative_strides');
   ensureDirSync(dir);
 
-  // Deep copy to avoid mutating the original
   let obj = JSON.parse(JSON.stringify(jsonObj.data));
 
   Object.keys(obj).forEach(key => {
-    // Reverse 1D arrays and set offset{KEY}
-    if (is1DNumberArray(obj[key])) {
-      obj[key] = obj[key].slice().reverse();
-      const offsetKey = `offset${key}`;
-      obj[offsetKey] = obj[key].length - 1;
+    if (!is1DNumberArray(obj[key])) return;
+    if (key.endsWith('_out')) return;
+
+    // Reverse original array
+    obj[key] = obj[key].slice().reverse();
+
+    // Set offset for the original array only
+    obj[`offset${capitalizeFirst(key)}`] = obj[key].length - 1;
+
+    // Reverse the corresponding `_out` array if it exists, without setting offset
+    const outKey = `${key}_out`;
+    if (is1DNumberArray(obj[outKey])) {
+      obj[outKey] = obj[outKey].slice().reverse();
     }
-    // Multiply stride variables by -1
+  });
+
+  Object.keys(obj).forEach(key => {
+    // Flip all stride values
     if (key.startsWith('stride') && typeof obj[key] === 'number') {
-      obj[key] = obj[key] * -1;
+      obj[key] = -obj[key];
     }
   });
 
   const outFile = path.join(dir, jsonObj.filename);
-  fs.writeFileSync(outFile, JSON.stringify(obj, null, 2), 'utf8');
+  fs.writeFileSync(outFile, JSON.stringify(obj, null, 2) + '\n', 'utf8');
 }
 
 function addSpacingToArray(arr) {
@@ -94,29 +107,35 @@ function largeFixtures(jsonObj) {
   const dir = path.join(directoryPath, 'large_strides');
   ensureDirSync(dir);
 
-  // Deep copy to avoid mutating the original
   let obj = JSON.parse(JSON.stringify(jsonObj.data));
 
   Object.keys(obj).forEach(key => {
-    // Add spacing to 1D arrays
-    if (is1DNumberArray(obj[key])) {
-      obj[key] = addSpacingToArray(obj[key]);
+    if (!is1DNumberArray(obj[key])) return;
+    if (key.endsWith('_out')) return;
+
+    obj[key] = addSpacingToArray(obj[key]);
+
+    const outKey = `${key}_out`;
+    if (is1DNumberArray(obj[outKey])) {
+      obj[outKey] = addSpacingToArray(obj[outKey]);
     }
-    // Multiply variables named exactly 'stride' by 2
-    if ( key.startsWith('stride') && typeof obj[key] === 'number') {
-      obj[key] = obj[key] * 2;
+  });
+
+  Object.keys(obj).forEach(key => {
+    if (key.startsWith('stride') && typeof obj[key] === 'number') {
+      obj[key] *= 2;
     }
   });
 
   const outFile = path.join(dir, jsonObj.filename);
-  fs.writeFileSync(outFile, JSON.stringify(obj, null, 2), 'utf8');
+  fs.writeFileSync(outFile, JSON.stringify(obj, null, 2) + '\n', 'utf8');
 }
- 
+
+
 function MixedStridesData(jsonObj) {
   const dir = path.join(directoryPath, 'mixed_strides');
   ensureDirSync(dir);
 
-  // Deep copy to avoid mutating original
   let obj = JSON.parse(JSON.stringify(jsonObj.data));
 
   if (!obj.order || (obj.order !== 'row-major' && obj.order !== 'column-major')) {
@@ -125,6 +144,7 @@ function MixedStridesData(jsonObj) {
 
   Object.keys(obj).forEach(key => {
     if (!is1DNumberArray(obj[key])) return;
+    if (key.endsWith('_out')) return;
 
     const stride1Key = `stride${key}1`;
     const stride2Key = `stride${key}2`;
@@ -136,17 +156,15 @@ function MixedStridesData(jsonObj) {
       const arr = obj[key];
       const s1 = obj[stride1Key];
       const s2 = obj[stride2Key];
-      const offset = typeof obj[offsetKey] === 'number' ? obj[offsetKey] : 0;
+      const offset = 0;
 
-      // Check stride ordering according to major order
+      const arrOut = obj[`${key}_out`];
+      const hasOut = is1DNumberArray(arrOut);
+
       if (
         (obj.order === 'row-major' && Math.abs(s1) > Math.abs(s2)) ||
         (obj.order === 'column-major' && Math.abs(s2) > Math.abs(s1))
       ) {
-        // Calculate matrix dimensions
-        // length = dim1 * dim2
-        // For row-major: dim1 = arr.length / abs(s1), dim2 = abs(s1)
-        // For column-major: dim1 = abs(s2), dim2 = arr.length / abs(s2)
         let dim1, dim2;
 
         if (obj.order === 'row-major') {
@@ -160,51 +178,46 @@ function MixedStridesData(jsonObj) {
         if (!Number.isInteger(dim1) || !Number.isInteger(dim2)) return;
 
         let newArr = new Array(arr.length);
+        let newArrOut = hasOut ? new Array(arrOut.length) : null;
 
         if (obj.order === 'row-major') {
-          // Reverse rows: row r becomes row (dim1 - 1 - r)
-          // Each row has dim2 elements
-          // Original index for element (r,c) = offset + r * s1 + c * s2
-          // New index for element (r,c) = offset + (dim1-1-r)*s1 + c*s2
           for (let r = 0; r < dim1; r++) {
             for (let c = 0; c < dim2; c++) {
               const srcIdx = offset + r * s1 + c * s2;
-              const destIdx = (dim1 - 1 - r) * dim2 + c; // linear index in newArr
+              const destIdx = (dim1 - 1 - r) * dim2 + c;
               newArr[destIdx] = arr[srcIdx];
+              if (hasOut) newArrOut[destIdx] = arrOut[srcIdx];
             }
           }
-          // Update stride2 to negative
-          obj[stride2Key] = s2;
           obj[stride1Key] = -s1;
-          // Update offset to point to the last row
+          obj[stride2Key] = s2;
           obj[offsetKey] = offset + (dim1 - 1) * s1;
-          obj[key] = newArr;
-        } else { // column-major
-          // Reverse columns: column c becomes (dim2 - 1 - c)
-          // Each column has dim1 elements
-          // Original index for (r,c) = offset + r*s1 + c*s2
-          // New index linear for (r,c) = r + c*dim1
+        } else {
           for (let c = 0; c < dim2; c++) {
             for (let r = 0; r < dim1; r++) {
               const srcIdx = offset + r * s1 + c * s2;
               const destIdx = r + (dim2 - 1 - c) * dim1;
               newArr[destIdx] = arr[srcIdx];
+              if (hasOut) newArrOut[destIdx] = arrOut[srcIdx];
             }
           }
-          // Update stride1 to negative
           obj[stride1Key] = s1;
           obj[stride2Key] = -s2;
-          // Update offset to point to last column
           obj[offsetKey] = offset + (dim2 - 1) * s2;
-          obj[key] = newArr;
+        }
+
+        obj[key] = newArr;
+        if (hasOut) {
+          obj[`${key}_out`] = newArrOut;
         }
       }
     }
   });
 
   const outFile = path.join(dir, jsonObj.filename);
-  fs.writeFileSync(outFile, JSON.stringify(obj, null, 2), 'utf8');
+  fs.writeFileSync(outFile, JSON.stringify(obj, null, 2) + '\n', 'utf8');
 }
+
 
 console.log(allJsonData);
 
